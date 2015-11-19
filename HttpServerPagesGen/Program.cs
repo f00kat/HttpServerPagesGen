@@ -7,14 +7,65 @@ using System.Threading.Tasks;
 
 namespace HttpServerPagesGen
 {
-    class Program
+    class FSDataCreator
     {
-        const int BYTES_PER_LINE = 16;
-
-        static void Main(string[] args)
+        class FileDescriptor
         {
-            string newline = Environment.NewLine;
+            private readonly string _file;
 
+            public FileDescriptor(string file)
+            {
+                _file = file;
+            }
+
+            public string FileName
+            {
+                get
+                {
+                    return _file;
+                }
+            }
+
+            public string FormatedFileName
+            {
+                get
+                {
+                    return _file.Replace(DEFAULT_DIR + "\\", String.Empty)
+                                .Replace(".", "_")
+                                .Replace("\\", "_");
+                }
+            }
+        }
+
+        private const string DEFAULT_DIR = "fs";
+
+        private const int BYTES_PER_LINE = 16;
+
+        private string newline = Environment.NewLine;
+
+        public FSDataCreator()
+        {
+
+        }
+
+        public string Create()
+        {
+            var result = new StringBuilder();
+
+            result.Append(GenerateHeader());
+
+            var files = new List<FileDescriptor>();
+            GetFiles(DEFAULT_DIR, files);
+
+            result.Append(GenerateData(files));
+
+            var res = result.ToString();
+
+            return res;
+        }
+
+        private string GenerateHeader()
+        {
             var result = new StringBuilder();
 
             result.Append($"#include \"fs.h\" {newline}");
@@ -27,45 +78,70 @@ namespace HttpServerPagesGen
 
             result.Append(newline);
 
-            var fileName = "index.html";
-            var formatedFileName = fileName.Replace('.', '_');
+            Console.WriteLine("Header generated");
 
-            var fileData = File.ReadAllText(fileName);
-
-            result.Append($"static const unsigned char data_{formatedFileName}[] = {{ {newline}");
-
-            result.Append($"/* {fileName} */ {newline}");
-            result.Append(FormatData(fileName));
-
-            result.Append(newline);
-
-            result.Append($"/* HTTP header */ {newline}");
-            result.Append(FormatData($"HTTP/1.0 200 OK"));
-
-            result.Append(newline);
-
-            result.Append($"/* Server */ {newline}");
-            result.Append(FormatData($"Server: lwIP/1.3.1"));
-
-            result.Append(newline);
-
-            result.Append($"/* Content-type */ {newline}");
-            result.Append(FormatData($"Content-type: text/html"));
-
-            result.Append(newline);
-            result.Append(newline);
-
-            result.Append(FormatData(fileData));
-
-            result.Append("};");
-
-
-            Console.WriteLine(result);
-
-            var res = result.ToString();
+            return result.ToString();
         }
 
-        private static string FormatData(string data)
+        private string GenerateData(IEnumerable<FileDescriptor> files)
+        {
+            var result = new StringBuilder();
+            foreach (var file in files)
+            {
+                var fileData = File.ReadAllText(file.FileName);
+
+                result.Append($"static const unsigned char data_{file.FormatedFileName}[] = {{ {newline}");
+
+                /* File name */
+                result.Append($"/* {file.FileName} */ {newline}");
+                result.Append(ToHEXFormat(file.FileName));
+
+                result.Append(newline);
+
+                /* HTTP Header */
+                result.Append($"/* HTTP header */ {newline}");
+                result.Append(ToHEXFormat($"HTTP/1.0 200 OK"));
+
+                result.Append(newline);
+
+                /* Server */
+                result.Append($"/* Server */ {newline}");
+                result.Append(ToHEXFormat($"Server: lwIP/1.3.1"));
+
+                result.Append(newline);
+
+                /* Content-type */
+                result.Append($"/* Content-type */ {newline}");
+                result.Append(ToHEXFormat($"Content-type: text/html"));
+
+                result.Append(newline);
+                result.Append(newline);
+
+                /* Data */
+                result.Append(ToHEXFormat(fileData));
+
+                result.Append("};");
+
+                result.Append(newline);
+                result.Append(newline);
+
+                Console.WriteLine($"file data '{file.FormatedFileName}' generated");
+            }
+
+            return result.ToString();
+        }
+
+
+        private static void GetFiles(string folderName, List<FileDescriptor> files)
+        {
+            foreach (var file in Directory.GetFiles(folderName))
+                files.Add(new FileDescriptor(file));
+
+            foreach (var dir in Directory.GetDirectories(folderName))
+                GetFiles(dir, files);
+        }
+
+        private static string ToHEXFormat(string data)
         {
             return String.Join(",", Encoding.ASCII.GetBytes(data).Select((n, i) =>
             {
@@ -76,6 +152,15 @@ namespace HttpServerPagesGen
 
                 return res;
             }));
+        }
+    }
+
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            var creator = new FSDataCreator();
+            creator.Create();
         }
     }
 }
