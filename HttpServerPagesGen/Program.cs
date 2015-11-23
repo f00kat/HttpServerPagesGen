@@ -9,6 +9,25 @@ namespace HttpServerPagesGen
 {
     class FSDataCreator
     {
+        class HTTPHeader
+        {
+            public HTTPHeader(ASCIIResult data, string comment)
+            {
+                Comment = comment;
+                Data = data;
+            }
+
+            public ASCIIResult Data { get; private set; }
+
+            public string Comment { get; private set; }
+
+            public string GetAsString(bool addCommaAtTheEndOfFile)
+            {
+                var data = addCommaAtTheEndOfFile ? Data.ASCIIDataWithComma : Data.ASCIIData;
+                return $"{Comment}{newline}{data}";
+            }
+        }
+
         class FileDescriptor
         {
             private readonly string _file;
@@ -50,7 +69,7 @@ namespace HttpServerPagesGen
             {
                 get
                 {
-                    return _file.Replace(DEFAULT_DIR, String.Empty)
+                    return _file.Replace(_FS_DIR, String.Empty)
                                 .Replace("\\", "/");
                 }
             }
@@ -59,7 +78,7 @@ namespace HttpServerPagesGen
             {
                 get
                 {
-                    return _file.Replace(DEFAULT_DIR + "\\", String.Empty)
+                    return _file.Replace(_FS_DIR + "\\", String.Empty)
                                 .Replace(".", "_")
                                 .Replace("\\", "_");
                 }
@@ -79,6 +98,8 @@ namespace HttpServerPagesGen
                 get
                 {
                     var result = new StringBuilder();
+
+                    /* \0 - end of string in C */
                     ASCIIResult fileName = ToHEXFormat($"{ServerFileName}\0");
 
                     result.Append($"/* {ServerFileName} ({fileName.Size} bytes) */ {newline}");
@@ -96,19 +117,19 @@ namespace HttpServerPagesGen
                 }
             }
 
-            public string HTTPContentType
+            public IEnumerable<HTTPHeader> GetHTTPHeaders()
+            {
+                return new List<HTTPHeader> { HTTPContentType };
+            }
+
+            public HTTPHeader HTTPContentType
             {
                 get
                 {
-                    var result = new StringBuilder();
-
                     var contentType = GetHTTPContentType(FileExtension);
-                    ASCIIResult contentTypeFull = ToHEXFormat($"Content-type: {contentType}{newline}{newline}");
-
-                    result.Append($"/* Content-type: {contentType} ({contentTypeFull.Size} bytes)*/{newline}");
-                    result.Append(contentTypeFull.ASCIIDataWithComma);
-
-                    return result.ToString();
+                    var contentTypeFull = ToHEXFormat($"Content-type: {contentType}{newline}{newline}");
+                    return new HTTPHeader(contentTypeFull,
+                                          $"/* Content-type: {contentType} ({contentTypeFull.Size} bytes)*/");
                 }
             }
 
@@ -160,7 +181,7 @@ namespace HttpServerPagesGen
 
         private static string DEFAULT_HTTP_CONTENT_TYPE = "text/plain";
 
-        private const string DEFAULT_DIR = "fs";
+        private static string _FS_DIR;
 
         private const int BYTES_PER_LINE = 16;
 
@@ -168,9 +189,12 @@ namespace HttpServerPagesGen
 
         private static string LastModifiedDate = DateTime.Now.ToString("r");
 
-        public FSDataCreator()
+        public FSDataCreator(string dir)
         {
+            _FS_DIR = dir;
 
+            if (!Directory.Exists(_FS_DIR))
+                throw new DirectoryNotFoundException(dir);
         }
 
         public string Create()
@@ -181,7 +205,7 @@ namespace HttpServerPagesGen
             result.Append(GenerateCHeader());
 
             var files = new LinkedList<FileDescriptor>();
-            GetFiles(DEFAULT_DIR, files);
+            GetFiles(_FS_DIR, files);
 
             /* Data section */
             result.Append(GenerateData(files));
@@ -215,32 +239,33 @@ namespace HttpServerPagesGen
         {
             var result = new StringBuilder();
             int i = 0;
+
+            var commonServerHeaders = new List<HTTPHeader> { GetHTTPHeader(), GetHTTPLastModified(), GetHTTPServerFootPrint() };
+
             foreach (var file in files)
             {
                 result.Append($"static const unsigned int dummy_align__{file.FileNameInCFormat} = {i};{newline}");
                 result.Append($"static const unsigned char data__{file.FileNameInCFormat}[] = {{ {newline}");
 
-                /* File name */
+                /* File name (for httpd server) */
                 result.Append(file.ServerFileNameInHEX);
                 result.Append(newline);
 
-                /* HTTP Header */
-                result.Append(GetHTTPHeader());
-                result.Append(newline);
+                var headers = new List<HTTPHeader>();
+                headers.AddRange(commonServerHeaders);
+                headers.AddRange(file.GetHTTPHeaders());
 
-                /* Last-Modified */
-                result.Append(GetLastModified());
-                result.Append(newline);
+                /* Include HTTP Headers */
+                foreach (var httpHeader in headers)
+                {
+                    var isLast = httpHeader == headers.Last();
 
-                /* Server */
-                result.Append(GetServerFootPrint());
-                result.Append(newline);
+                    result.Append(httpHeader.GetAsString(!isLast));
+                    result.Append(newline);
+                }
 
-                /* Content-type */
-                result.Append(file.HTTPContentType);
+                /* End of HTTP Header */
                 result.Append(newline);
-                result.Append(newline);
-
 
                 /* Data */
                 result.Append(file.HTTPData);
@@ -258,34 +283,26 @@ namespace HttpServerPagesGen
             return result.ToString();
         }
 
-        private static string GetHTTPHeader()
+        private static HTTPHeader GetHTTPHeader()
         {
-            var result = new StringBuilder();
-            ASCIIResult header = ToHEXFormat($"HTTP/1.0 200 OK{newline}");
-            result.Append($"/* HTTP/1.0 200 OK ({header.Size} bytes)*/{newline}");
-            result.Append(header.ASCIIDataWithComma);
-
-            return result.ToString();
+            var header = ToHEXFormat($"HTTP/1.0 200 OK{newline}");
+            return new HTTPHeader(header,
+                                  $"/* HTTP/1.0 200 OK ({header.Size} bytes) */");
         }
 
-        private static string GetLastModified()
+
+        private static HTTPHeader GetHTTPLastModified()
         {
-            var result = new StringBuilder();
             ASCIIResult lastModified = ToHEXFormat($"Last-Modified: {LastModifiedDate}{newline}");
-            result.Append($"/* Last-Modified: {LastModifiedDate} ({lastModified.Size} bytes) */{newline}");
-            result.Append(lastModified.ASCIIDataWithComma);
-
-            return result.ToString();
+            return new HTTPHeader(lastModified,
+                                  $"/* Last-Modified: {LastModifiedDate} ({lastModified.Size} bytes) */");
         }
 
-        private static string GetServerFootPrint()
+        private static HTTPHeader GetHTTPServerFootPrint()
         {
-            var result = new StringBuilder();
             ASCIIResult server = ToHEXFormat($"Server: {SERVER_FOOT_PRINT}{newline}");
-            result.Append($"/* Server: {SERVER_FOOT_PRINT} ({server.Size} bytes) */{newline}");
-            result.Append(server.ASCIIDataWithComma);
-
-            return result.ToString();
+            return new HTTPHeader(server,
+                                  $"/* Server: {SERVER_FOOT_PRINT} ({server.Size} bytes) */");
         }
 
         private string GenerateFiles(LinkedList<FileDescriptor> files)
@@ -375,10 +392,17 @@ namespace HttpServerPagesGen
     {
         static void Main(string[] args)
         {
-            var creator = new FSDataCreator();
-            var result = creator.Create();
+            try
+            {
+                var creator = new FSDataCreator("fs");
+                var result = creator.Create();
 
-            File.WriteAllText("fsdata.c", result);
+                File.WriteAllText("fsdata.c", result);
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine($"Error! '{ex.GetType().Name} {ex.Message}'");
+            }
         }
     }
 }
